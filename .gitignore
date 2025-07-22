@@ -1,0 +1,9 @@
+# Environment artifacts
+.venv/
+__pycache__/
+run.sh
+
+# Output directories
+artifacts/
+ledger/
+
