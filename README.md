@@ -21,7 +21,8 @@ feat/GH-03-{feature}-{date}-{time}
 ## Self-test runner
 
 The script `codex_tas_runner.py` automates a safe-mode self-test. Set your
-OpenAI API key in `OPENAI_API_KEY` and run:
+OpenAI API key in `OPENAI_API_KEY`, install dependencies with
+`pip install -r requirements.txt`, and run:
 
 ```
 python codex_tas_runner.py

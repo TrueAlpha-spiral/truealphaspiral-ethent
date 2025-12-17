@@ -6,12 +6,13 @@ Set ``OPENAI_API_KEY`` in your environment and execute with ``python
 codex_tas_runner.py``. The script requests a minimal bash recipe from
 GPT-4o-code, runs it, and prints a JSON summary.
 """
+import importlib
+import importlib.util
 import os
 import subprocess
 import json
 import hashlib
 import time
-import openai
 from artifact_guard import run_step
 
 def _require_api_key() -> str:
@@ -23,7 +24,7 @@ def _require_api_key() -> str:
         )
     return api_key
 
-SYSTEM = """You are a reliable DevOps assistant. 
+SYSTEM = """You are a reliable DevOps assistant.
 Produce a POSIX-compliant bash script that:
 1. Clones https://github.com/truealphaspiral/tas_gpt.git if not present.
 2. Creates a Python venv  (.venv)  and installs requirements.
@@ -34,8 +35,18 @@ Produce a POSIX-compliant bash script that:
 7. Computes SHA-256 of audit.log and writes it to ledger/self_test.hash
 """
 
-def get_codex_script():
-    resp = openai.ChatCompletion.create(
+
+def _load_openai():
+    """Return the ``openai`` module or raise an informative error."""
+    if importlib.util.find_spec("openai") is None:
+        raise ModuleNotFoundError(
+            "The 'openai' package is required. Install it with "
+            "`pip install openai` before running codex_tas_runner.py."
+        )
+    return importlib.import_module("openai")
+
+def get_codex_script(openai_client):
+    resp = openai_client.ChatCompletion.create(
         model="gpt-4o-code",  # or "gpt-4o"
         messages=[{"role":"system","content":SYSTEM}]
     )
@@ -57,9 +68,10 @@ def run_bash(script: str) -> subprocess.CompletedProcess:
 
 
 def main() -> None:
-    openai.api_key = _require_api_key()
+    openai_client = _load_openai()
+    openai_client.api_key = _require_api_key()
 
-    bash_script = get_codex_script()
+    bash_script = get_codex_script(openai_client)
     result = run_bash(bash_script)
 
     # compute SHA-256 of audit.log after execution
