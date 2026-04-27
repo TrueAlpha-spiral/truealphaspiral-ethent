@@ -244,6 +244,19 @@ class TestConsentLedger:
         # ALL covers ACCESS; finding a record for ACCESS should succeed
         assert ledger.find_consent("u1", UnalienableRight.ACCESS) is not None
 
+    def test_find_consent_none_for_wrong_governance_act(self):
+        ledger = ConsentLedger()
+        ledger.record_consent("u1", UnalienableRight.AGENCY, "act_a")
+        # Consent for act_a must not satisfy a query for act_b (cross-act replay)
+        assert ledger.find_consent("u1", UnalienableRight.AGENCY, governance_act="act_b") is None
+
+    def test_find_consent_matches_correct_governance_act(self):
+        ledger = ConsentLedger()
+        ledger.record_consent("u1", UnalienableRight.AGENCY, "act_a")
+        result = ledger.find_consent("u1", UnalienableRight.AGENCY, governance_act="act_a")
+        assert result is not None
+        assert result.governance_act == "act_a"
+
     def test_find_consent_returns_most_recent(self):
         ledger = ConsentLedger()
         ledger.record_consent(
@@ -312,6 +325,19 @@ class TestConsentHolds:
         assert consent_holds(ledger, "u1", UnalienableRight.LIBERTY)
         assert consent_holds(ledger, "u1", UnalienableRight.AGENCY)
 
+    def test_false_for_wrong_governance_act(self):
+        ledger = ConsentLedger()
+        ledger.record_consent("u1", UnalienableRight.AGENCY, "export")
+        # Consent for "export" must not satisfy a check against "import"
+        assert not consent_holds(ledger, "u1", UnalienableRight.AGENCY,
+                                 governance_act="import")
+
+    def test_true_for_matching_governance_act(self):
+        ledger = ConsentLedger()
+        ledger.record_consent("u1", UnalienableRight.AGENCY, "export")
+        assert consent_holds(ledger, "u1", UnalienableRight.AGENCY,
+                             governance_act="export")
+
 
 # ===========================================================================
 # make_consent_invariant
@@ -320,9 +346,9 @@ class TestConsentHolds:
 
 class TestMakeConsentInvariant:
     def _make_invariant(self, ledger: ConsentLedger, subject_id: str,
-                        right: UnalienableRight):
+                        right: UnalienableRight, governance_act: str = "test_act"):
         def extractor(_s, _a, _u):
-            return subject_id, right
+            return subject_id, right, governance_act
 
         return make_consent_invariant(ledger, extractor)
 
@@ -340,7 +366,7 @@ class TestMakeConsentInvariant:
         ledger = ConsentLedger()
         inv = make_consent_invariant(
             ledger,
-            lambda *_: ("u1", UnalienableRight.AGENCY),
+            lambda *_: ("u1", UnalienableRight.AGENCY, "test_act"),
             version="2.0.0",
         )
         assert inv.version == "2.0.0"
@@ -348,7 +374,7 @@ class TestMakeConsentInvariant:
     def test_invariant_passes_when_consent_exists(self):
         ledger = ConsentLedger()
         ledger.record_consent("u1", UnalienableRight.AGENCY, "export")
-        inv = self._make_invariant(ledger, "u1", UnalienableRight.AGENCY)
+        inv = self._make_invariant(ledger, "u1", UnalienableRight.AGENCY, "export")
         assert inv.check(None, None, None) is True
 
     def test_invariant_fails_when_no_consent(self):
@@ -362,8 +388,43 @@ class TestMakeConsentInvariant:
             "u1", UnalienableRight.AGENCY, "export",
             expiry=100.0, timestamp=1.0,
         )
-        inv = self._make_invariant(ledger, "u1", UnalienableRight.AGENCY)
+        inv = self._make_invariant(ledger, "u1", UnalienableRight.AGENCY, "export")
         # The invariant calls consent_holds with current time, which is > 100.0
+        assert inv.check(None, None, None) is False
+
+    def test_invariant_fails_for_wrong_governance_act(self):
+        ledger = ConsentLedger()
+        ledger.record_consent("u1", UnalienableRight.AGENCY, "export")
+        # Extractor requests "import" but consent is only on record for "export"
+        inv = self._make_invariant(ledger, "u1", UnalienableRight.AGENCY, "import")
+        assert inv.check(None, None, None) is False
+
+    def test_invariant_uses_injected_clock_before_expiry(self):
+        ledger = ConsentLedger()
+        ledger.record_consent(
+            "u1", UnalienableRight.AGENCY, "export",
+            expiry=500.0, timestamp=1.0,
+        )
+        # Injected clock returns a time before expiry → consent is valid
+        inv = make_consent_invariant(
+            ledger,
+            lambda *_: ("u1", UnalienableRight.AGENCY, "export"),
+            clock=lambda: 250.0,
+        )
+        assert inv.check(None, None, None) is True
+
+    def test_invariant_uses_injected_clock_after_expiry(self):
+        ledger = ConsentLedger()
+        ledger.record_consent(
+            "u1", UnalienableRight.AGENCY, "export",
+            expiry=500.0, timestamp=1.0,
+        )
+        # Injected clock returns a time after expiry → consent is invalid
+        inv = make_consent_invariant(
+            ledger,
+            lambda *_: ("u1", UnalienableRight.AGENCY, "export"),
+            clock=lambda: 600.0,
+        )
         assert inv.check(None, None, None) is False
 
 
@@ -383,7 +444,7 @@ class TestDigitalRightsUVKIntegration:
 
         inv = make_consent_invariant(
             ledger,
-            lambda *_: ("user_a", UnalienableRight.AGENCY),
+            lambda *_: ("user_a", UnalienableRight.AGENCY, "personal_data_read"),
         )
         uvk = UVK(capability_table=ct, wake_chain=chain, invariants=[inv])
         result = uvk.admit(cap, Right.READ, action="read_personal_data")
@@ -398,7 +459,7 @@ class TestDigitalRightsUVKIntegration:
 
         inv = make_consent_invariant(
             ledger,
-            lambda *_: ("user_b", UnalienableRight.AGENCY),
+            lambda *_: ("user_b", UnalienableRight.AGENCY, "personal_data_read"),
         )
         uvk = UVK(capability_table=ct, wake_chain=chain, invariants=[inv])
         result = uvk.admit(cap, Right.READ, action="read_without_consent")
@@ -422,10 +483,28 @@ class TestDigitalRightsUVKIntegration:
 
         inv = make_consent_invariant(
             ledger,
-            lambda *_: ("user_c", UnalienableRight.ACCESS),
+            lambda *_: ("user_c", UnalienableRight.ACCESS, "expired_act"),
         )
         uvk = UVK(capability_table=ct, wake_chain=chain, invariants=[inv])
         result = uvk.admit(cap, Right.EXECUTE, action="expired_consent_action")
+        assert not result.admitted
+        assert "digital_rights:consent_required" in result.failed_invariants
+
+    def test_uvk_denies_when_governance_act_mismatched(self):
+        chain = WakeChain()
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.READ | Right.MINT)
+
+        ledger = ConsentLedger()
+        ledger.record_consent("user_d", UnalienableRight.AGENCY, "export_act")
+
+        # Invariant requests consent for "import_act"; cross-act replay must fail
+        inv = make_consent_invariant(
+            ledger,
+            lambda *_: ("user_d", UnalienableRight.AGENCY, "import_act"),
+        )
+        uvk = UVK(capability_table=ct, wake_chain=chain, invariants=[inv])
+        result = uvk.admit(cap, Right.READ, action="cross_act_attempt")
         assert not result.admitted
         assert "digital_rights:consent_required" in result.failed_invariants
 
@@ -441,11 +520,11 @@ class TestDigitalRightsUVKIntegration:
 
         inv_alice = make_consent_invariant(
             ledger,
-            lambda *_: ("alice", UnalienableRight.LIBERTY),
+            lambda *_: ("alice", UnalienableRight.LIBERTY, "alice_read"),
         )
         inv_bob = make_consent_invariant(
             ledger,
-            lambda *_: ("bob", UnalienableRight.LIBERTY),
+            lambda *_: ("bob", UnalienableRight.LIBERTY, "bob_read"),
         )
 
         uvk_alice = UVK(
