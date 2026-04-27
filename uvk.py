@@ -32,6 +32,12 @@ from typing import Any, Callable, Dict, List, Optional
 from capability import Capability, CapabilityError, CapabilityTable, Right
 from wake_chain import ProvenanceMark, WakeChain, get_default_chain
 
+# Rights that are required to pass an action to the YKnot.
+# A capability token that does not carry at least one of these rights is
+# refused at the outermost perimeter, *before* any invariant evaluation.
+# Note: Right is a Flag enum, so the bitwise OR produces a valid Right instance.
+_ADMISSIBLE_RIGHTS: Right = Right.EXECUTE | Right.MINT
+
 
 # ---------------------------------------------------------------------------
 # Invariant types
@@ -71,9 +77,19 @@ class Invariant:
 
 class AdmissionStatus(Enum):
     ADMITTED = auto()
+    DENIED_AUTHORIZATION = auto()
     DENIED_CAPABILITY = auto()
     DENIED_INVARIANT = auto()
     DENIED_WAKE = auto()
+
+
+class AuthorizationError(Exception):
+    """Raised when the presented capability lacks EXECUTE or MINT rights.
+
+    This is the outermost perimeter check.  It fires *before* the
+    capability-table ``invoke`` call and *before* any invariant (including
+    the Sovereign Equation A_C > S_C) is evaluated.
+    """
 
 
 @dataclass
@@ -99,6 +115,7 @@ class AdmissionResult:
     receipt: Optional[ProvenanceMark] = None
     failed_invariants: List[str] = field(default_factory=list)
     cap_error: Optional[str] = None
+    auth_error: Optional[str] = None
     wake_valid: bool = True
 
     @property
@@ -189,6 +206,26 @@ class UVK:
         AdmissionResult
             ADMITTED with a wake receipt, or DENIED_* with breach details.
         """
+        # --- Step 0: perimeter authorization check ----------------------
+        # Only capabilities that explicitly carry EXECUTE or MINT rights may
+        # present an action to the YKnot.  Any other right (READ, WRITE, …)
+        # is rejected immediately – *before* the Sovereign Equation is
+        # evaluated – collapsing the action to Process Null (Π = ∅).
+        if not (capability.has_right(Right.EXECUTE) or capability.has_right(Right.MINT)):
+            msg = (
+                f"Capability {capability.cap_id!r} lacks required EXECUTE or MINT right "
+                f"(holds: {capability.rights!r}); action collapsed to Π = ∅"
+            )
+            try:
+                raise AuthorizationError(msg)
+            except AuthorizationError as exc:
+                result = AdmissionResult(
+                    status=AdmissionStatus.DENIED_AUTHORIZATION,
+                    auth_error=str(exc),
+                    wake_valid=self.wake.verify(),
+                )
+                return self._handle_breach(result)
+
         # --- Step 1: capability check -----------------------------------
         try:
             self.cap_table.invoke(capability, required_right, msg=action)
