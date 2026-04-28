@@ -266,6 +266,7 @@ class ConsentLedger:
         self,
         subject_id: str,
         required_rights: UnalienableRight,
+        governance_act: Optional[str] = None,
         at: Optional[float] = None,
     ) -> Optional[ConsentRecord]:
         """Return the most recent valid consent record covering *required_rights*.
@@ -276,6 +277,12 @@ class ConsentLedger:
         2. Its proof is cryptographically intact.
         3. It has not expired.
         4. Its ``rights_granted`` covers every bit in *required_rights*.
+        5. Its ``governance_act`` matches *governance_act* (when provided).
+
+        Enforces the Maxim of Law: "He who mistakes is not considered as
+        consenting."  Consent is bound to the specific act for which it was
+        recorded; a record for one governance act may not be replayed against
+        a different act.
 
         Parameters
         ----------
@@ -283,6 +290,10 @@ class ConsentLedger:
             The party whose consent is being queried.
         required_rights:
             Minimum set of :class:`UnalienableRight` values that must be covered.
+        governance_act:
+            When provided, only records whose ``governance_act`` exactly matches
+            this value are considered.  Omit (or pass ``None``) only when act
+            binding is intentionally relaxed (e.g. administrative audits).
         at:
             Evaluation timestamp (defaults to now).
 
@@ -294,6 +305,8 @@ class ConsentLedger:
         """
         for rec in reversed(self._records):
             if rec.subject_id != subject_id:
+                continue
+            if governance_act is not None and rec.governance_act != governance_act:
                 continue
             if not rec.is_valid_proof():
                 continue
@@ -313,6 +326,7 @@ def consent_holds(
     ledger: ConsentLedger,
     subject_id: str,
     required_rights: UnalienableRight,
+    governance_act: Optional[str] = None,
     at: Optional[float] = None,
 ) -> bool:
     """Return True iff valid, informed consent exists for *subject_id*.
@@ -329,6 +343,9 @@ def consent_holds(
         The party whose consent must be on file.
     required_rights:
         The :class:`UnalienableRight` values the act requires consent for.
+    governance_act:
+        When provided, only records bound to this specific governance act are
+        considered valid.  Prevents cross-act consent replay.
     at:
         Evaluation timestamp (defaults to now).
 
@@ -336,22 +353,23 @@ def consent_holds(
     -------
     bool
         ``True`` iff at least one valid, unexpired consent record exists
-        that covers *required_rights*.
+        that covers *required_rights* (and *governance_act*, when provided).
     """
-    return ledger.find_consent(subject_id, required_rights, at) is not None
+    return ledger.find_consent(subject_id, required_rights, governance_act, at) is not None
 
 
 # ---------------------------------------------------------------------------
 # UVK-compatible Invariant factory
 # ---------------------------------------------------------------------------
 
-_SubjectExtractor = Callable[[Any, Any, Any], Tuple[str, UnalienableRight]]
-"""Callable(state, action, inputs) → (subject_id, required_rights)."""
+_SubjectExtractor = Callable[[Any, Any, Any], Tuple[str, UnalienableRight, str]]
+"""Callable(state, action, inputs) → (subject_id, required_rights, governance_act)."""
 
 
 def make_consent_invariant(
     ledger: ConsentLedger,
     subject_extractor: _SubjectExtractor,
+    clock: Callable[[], float] = time.time,
     version: str = "1.0.0",
 ) -> Invariant:
     """Return a :class:`~uvk.Invariant` that enforces informed consent.
@@ -366,8 +384,14 @@ def make_consent_invariant(
     ledger:
         The :class:`ConsentLedger` that holds consent records.
     subject_extractor:
-        Pure function ``(state, action, inputs) → (subject_id, required_rights)``.
+        Pure function ``(state, action, inputs) → (subject_id, required_rights,
+        governance_act)``.  The ``governance_act`` component binds the consent
+        check to the specific act being evaluated, preventing cross-act replay.
         Must be side-effect-free; it is called inside the UVK hot-path.
+    clock:
+        Zero-argument callable returning the current Unix epoch as a float.
+        Defaults to :func:`time.time`.  Inject a deterministic callable in
+        tests or audit environments to achieve temporal immutability.
     version:
         Invariant version string (bound into the UVK Wrinkle for replay).
 
@@ -384,15 +408,16 @@ def make_consent_invariant(
         ledger.record_consent("user_1", UnalienableRight.AGENCY, "data_export")
 
         def my_extractor(state, action, inputs):
-            return "user_1", UnalienableRight.AGENCY
+            return "user_1", UnalienableRight.AGENCY, "data_export"
 
         inv = make_consent_invariant(ledger, my_extractor)
         uvk = UVK(invariants=[inv], ...)
     """
 
     def _check(state: Any, action: Any, inputs: Any) -> bool:
-        subject_id, required_rights = subject_extractor(state, action, inputs)
-        return consent_holds(ledger, subject_id, required_rights)
+        subject_id, required_rights, governance_act = subject_extractor(state, action, inputs)
+        return consent_holds(ledger, subject_id, required_rights,
+                             governance_act=governance_act, at=clock())
 
     return Invariant(
         name    = "digital_rights:consent_required",
