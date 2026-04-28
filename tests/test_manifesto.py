@@ -44,7 +44,7 @@ from sovereign_equation import (
 )
 from wake_chain import WakeChain
 from capability import CapabilityTable, Right
-from uvk import UVK, Invariant
+from uvk import UVK, Invariant, AdmissionStatus, AuthorizationError
 
 
 # ===========================================================================
@@ -463,6 +463,109 @@ class TestSovereignEquationUVKIntegration:
         result = uvk.admit(cap, Right.EXECUTE, action="ungrounded_claim")
         assert not result.admitted
         assert "sovereign_equation:A_C>S_C" in result.failed_invariants
+
+
+# ===========================================================================
+# Perimeter defense: EXECUTE / MINT right enforcement
+# ===========================================================================
+
+
+class TestUVKPerimeterDefense:
+    """Validate that UVK rejects at the outermost perimeter any capability
+    that does not carry EXECUTE or MINT, *before* the Sovereign Equation
+    (A_C > S_C) is evaluated.
+    """
+
+    def _uvk_with_always_passing_invariant(self, chain: WakeChain, ct: CapabilityTable) -> UVK:
+        """Return a UVK whose sovereign-equation invariant always passes."""
+        inv = make_sovereign_invariant(
+            lambda *_: AuthenticityScore(
+                authenticated_facts=1,
+                traced_lineage=True,
+                cryptographic_proof=True,
+            ),
+            lambda *_: SubjectivityScore(),
+        )
+        return UVK(capability_table=ct, wake_chain=chain, invariants=[inv])
+
+    def test_read_only_capability_denied_at_perimeter(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.READ)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        result = uvk.admit(cap, Right.READ, action="read_action")
+        assert not result.admitted
+        assert result.status == AdmissionStatus.DENIED_AUTHORIZATION
+
+    def test_write_only_capability_denied_at_perimeter(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.WRITE)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        result = uvk.admit(cap, Right.WRITE, action="write_action")
+        assert not result.admitted
+        assert result.status == AdmissionStatus.DENIED_AUTHORIZATION
+
+    def test_read_write_capability_denied_at_perimeter(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.READ | Right.WRITE)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        result = uvk.admit(cap, Right.READ, action="read_write_action")
+        assert not result.admitted
+        assert result.status == AdmissionStatus.DENIED_AUTHORIZATION
+
+    def test_auth_error_message_populated_on_perimeter_denial(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.READ)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        result = uvk.admit(cap, Right.READ, action="any_action")
+        assert result.auth_error is not None
+        assert "EXECUTE" in result.auth_error
+        assert "MINT" in result.auth_error
+
+    def test_execute_capability_passes_perimeter(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.EXECUTE)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        result = uvk.admit(cap, Right.EXECUTE, action="execute_action")
+        assert result.admitted
+
+    def test_mint_capability_passes_perimeter(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.MINT)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        result = uvk.admit(cap, Right.MINT, action="mint_action")
+        assert result.admitted
+
+    def test_execute_and_mint_capability_passes_perimeter(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.EXECUTE | Right.MINT)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        result = uvk.admit(cap, Right.EXECUTE, action="full_action")
+        assert result.admitted
+
+    def test_perimeter_denial_recorded_in_breach_log(self):
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.READ)
+        uvk = self._uvk_with_always_passing_invariant(WakeChain(), ct)
+        uvk.admit(cap, Right.READ, action="bad_action")
+        assert len(uvk.breach_log) == 1
+        assert uvk.breach_log[0].status == AdmissionStatus.DENIED_AUTHORIZATION
+
+    def test_perimeter_denial_precedes_sovereign_equation(self):
+        """Sovereign equation invariant must never be reached for non-EXECUTE/MINT caps."""
+        evaluated: list[bool] = []
+
+        def tracking_ac(*_: object) -> AuthenticityScore:
+            evaluated.append(True)
+            return AuthenticityScore(authenticated_facts=1, traced_lineage=True, cryptographic_proof=True)
+
+        ct = CapabilityTable()
+        cap = ct.retype("resource", Right.READ)
+        inv = make_sovereign_invariant(tracking_ac, lambda *_: SubjectivityScore())
+        uvk = UVK(capability_table=ct, wake_chain=WakeChain(), invariants=[inv])
+        result = uvk.admit(cap, Right.READ, action="action")
+        assert not result.admitted
+        assert result.status == AdmissionStatus.DENIED_AUTHORIZATION
+        assert not evaluated, "Sovereign equation must NOT be evaluated at perimeter denial"
 
 
 # ===========================================================================
