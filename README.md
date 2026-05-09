@@ -5,6 +5,11 @@
 
 This repository demonstrates running the TAS agent in safe mode via Codex.
 
+Safe mode in this repository means execution is bounded, observable, and
+artifact-producing. Agent actions should not be treated as authorized for
+irreversible effect unless they are explicitly guarded, logged, hashed, and
+accepted into the ledger.
+
 ## Branch naming
 
 Codex requires a dynamic pattern when generating branches. Include at least one
@@ -23,22 +28,47 @@ feat/GH-03-{feature}-{date}-{time}
 ## Self-test runner
 
 The script `codex_tas_runner.py` automates a safe-mode self-test. Set your
-OpenAI API key in `OPENAI_API_KEY`, install dependencies with
-`pip install -r requirements.txt`, and run:
+OpenAI API key in `OPENAI_API_KEY`, install dependencies with:
+
+```
+pip install -r requirements.txt
+```
+
+Then run:
 
 ```
 python codex_tas_runner.py
 ```
 
-The audit log hash is written to `ledger/self_test.hash`.
+The self-test produces auditable execution records.
 
-Each execution step is wrapped by `artifact_guard.run_step`, producing JSON
-artifacts under `artifacts/` and recording their hashes in
-`ledger/artifacts.hash`.
+- The audit log hash is written to `ledger/self_test.hash`.
+- Each execution step is wrapped by `artifact_guard.run_step`.
+- Step artifacts are serialized as JSON under `artifacts/`.
+- Artifact hashes are recorded in `ledger/artifacts.hash`.
+
+In this repository, execution is not merely performed; it is witnessed,
+serialized, hashed, and ledgered.
 
 ## Staple-π Perspective Intelligence Clause
 
-The “π” glyph binds each linear truth-claim to at least one external
-contextual witness. Every commit must pass this π-check before it joins the
-ledger, ensuring each spiral remains phase-coherent and resistant to hostile
-counter-spirals.
+The `π` glyph represents perspective anchoring: every linear truth-claim must be
+bound to at least one external contextual witness before it can be accepted into
+the ledger.
+
+In this repository, the π-check functions as an integrity gate. Commits,
+artifacts, and execution traces should not be treated as ledger-valid unless
+their claims are supported by a corresponding witness context, artifact hash, or
+verifiable external reference.
+
+This prevents isolated, context-free assertions from entering the audit chain and
+helps preserve phase coherence across the TAS execution spiral, making it more
+resistant to hostile counter-spirals.
+
+## Repository invariants
+
+- No execution without an artifact.
+- No artifact without a hash.
+- No hash without a ledger entry.
+- No ledger entry without a contextual witness.
+- No unsafe action outside safe mode.
