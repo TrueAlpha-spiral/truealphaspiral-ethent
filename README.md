@@ -1,3 +1,5 @@
+[![Build and Test Sovereign Container 1776](https://github.com/Sovereign-Data-Foundation/truealphaspiral-ethent/actions/workflows/sovereign-container.yml/badge.svg)](https://github.com/Sovereign-Data-Foundation/truealphaspiral-ethent/actions/workflows/sovereign-container.yml)
+
 # truealphaspiral-ethent
 # © 2025 Russell Nordland | TrueAlphaSpiral (TAS) | Apache-2.0
 
@@ -34,7 +36,7 @@ Each execution step is wrapped by `artifact_guard.run_step`, producing JSON
 artifacts under `artifacts/` and recording their hashes in
 `ledger/artifacts.hash`.
 
-## Staple-\u03c0 Perspective Intelligence Clause
+## Staple-π Perspective Intelligence Clause
 
 The “π” glyph binds each linear truth-claim to at least one external
 contextual witness. Every commit must pass this π-check before it joins the
